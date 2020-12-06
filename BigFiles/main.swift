@@ -8,15 +8,14 @@
 import Foundation
 import ArgumentParser
 
-// counter of how many files we've counted
-var totalFiles = 0
+
 // What we keep track of when indexing files
 struct BigFile {
-    var path: String
+    var name: String
     var size: Int
 }
 // Array of all files, limited to --number option
-var allFiles: [BigFile] = []
+
 
 
 struct BigFiles: ParsableCommand {
@@ -26,9 +25,6 @@ struct BigFiles: ParsableCommand {
     
     @Flag(help: "human readable format")
     var human = false
-
-    @Option(name: .shortAndLong, help: "The number of directories to go deep.")
-    var depth = 10
     
     @Option(name: .shortAndLong, help: "The number of files to display.")
     var number = 10
@@ -42,46 +38,6 @@ struct BigFiles: ParsableCommand {
             print(msg)
         }
     }
-    
-    
-    func look_at_file(path: String, depthRemaining: Int) {
-        if depthRemaining < 0 {
-            return
-        }
-        vlog(msg: "Looking at \(path), depthRemaining: \(depthRemaining)")
-        let url = URL(fileURLWithPath: path)
-        
-        guard (try? url.checkResourceIsReachable()) != nil else {
-            return
-        }
-        
-        let vals = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
-        
-        
-        if let islink = vals?.isSymbolicLink, islink {
-            vlog(msg: "\t\tSkipping symbolic link")
-        } else if let isdir = vals?.isDirectory, isdir {
-            vlog(msg: "\t\tIt's a directory")
-            if let items = try? FileManager.default.contentsOfDirectory(atPath: path) {
-                for item in items {
-                    look_at_file(path: "\(path)/\(item)", depthRemaining: depthRemaining - 1)
-                }
-            }
-        } else { // its a file
-            vlog(msg: "\t\tIt's a file")
-            totalFiles = totalFiles + 1
-            var fileSizeValue = 0
-            try? fileSizeValue = (url.resourceValues(forKeys: [URLResourceKey.fileSizeKey]).allValues.first?.value as! Int?)!
-            
-            allFiles.append(BigFile(path: path, size: fileSizeValue))
-            allFiles.sort { $0.size > $1.size }
-            if allFiles.count > number {
-                allFiles.removeLast()
-            }
-        }
-    }
-    
-    
 
     func humanReadable(_ bytes: Int) -> String {
         let suffix = ["B", "K", "M", "G", "T", "P", "E"]
@@ -107,22 +63,50 @@ struct BigFiles: ParsableCommand {
     
     mutating func run() throws {
         let cwd = FileManager.default.currentDirectoryPath
-        path = path ?? cwd
         let startTime = Date().timeIntervalSince1970
-        look_at_file(path: path!, depthRemaining: depth)
-        print("Total File Checked: \(totalFiles)")
-        print("Biggest Files: \(allFiles.count)")
-        for file in allFiles {
+         
+        let directoryURL = URL(fileURLWithPath: (path ?? cwd))
+        let localFileManager = FileManager()
+         
+        let resourceKeys = Set<URLResourceKey>([.pathKey, .isDirectoryKey, .fileSizeKey])
+        let directoryEnumerator = localFileManager.enumerator(at: directoryURL, includingPropertiesForKeys: Array(resourceKeys), options: .skipsHiddenFiles)!
+        
+        var totalFiles = 0
+        var allFiles: [BigFile] = []
+        for case let fileURL as URL in directoryEnumerator {
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: resourceKeys),
+                let isDirectory = resourceValues.isDirectory,
+                let name = resourceValues.path,
+                let size = resourceValues.fileSize
+                else {
+                    continue
+            }
+            
+            if isDirectory {
+                if name == "_extras" {
+                    directoryEnumerator.skipDescendants()
+                }
+            } else {
+                totalFiles += 1
+                allFiles.append(BigFile(name: name, size: size))
+            }
+        }
+         
+        let totalTime = Date().timeIntervalSince1970 - startTime
+        print("Total File Checked: \(totalFiles) in \(String(format: "%.3f",totalTime)) seconds\n")
+        
+        allFiles.sort { $0.size > $1.size }
+        
+        for file in allFiles.prefix(number) {
             var size: String
             if human {
                 size = humanReadable(file.size)
             } else {
                 size = String(file.size)
             }
-            print("\(size)\t\(file.path)")
+            print("\(size)\t\(file.name)")
         }
-        let totalTime = Date().timeIntervalSince1970 - startTime
-        print("\nTotal Time: \(totalTime)")
+        
     }
 }
 
