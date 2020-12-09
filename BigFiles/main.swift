@@ -8,15 +8,24 @@
 import Foundation
 import ArgumentParser
 
-
-// What we keep track of when indexing files
-struct BigFile: Hashable {
+protocol FileProperty: Comparable {
+    var size: Int { get set }
+}
+struct BigFile: FileProperty {
     var name: String
     var size: Int
     var fileType: String
 }
-// Array of all files, limited to --number option
-
+struct TypeSummary: FileProperty {
+    var type: String
+    var count: Int
+    var size: Int
+}
+extension FileProperty {
+    static func <(lhs: Self, rhs: Self) -> Bool {
+        return lhs.size > rhs.size
+    }
+}
 
 func humanReadable(_ bytes: Int) -> String {
     let suffix = ["B", "K", "M", "G", "T", "P", "E"]
@@ -41,7 +50,13 @@ func humanReadable(_ bytes: Int) -> String {
 }
 
 
-func analyzePath(path: URL, human: Bool, number: Int) {
+func analyzePath(path: URL, number: Int) -> (
+        totalFiles: Int,
+        totalTime: Double,
+        totalFileSize: Int,
+        summary: Array<TypeSummary>,
+        files: Array<BigFile>) {
+    
     let startTime = Date().timeIntervalSince1970
     let localFileManager = FileManager()
     
@@ -71,41 +86,39 @@ func analyzePath(path: URL, human: Bool, number: Int) {
             allFiles.append(BigFile(name: name, size: size, fileType: fileURL.pathExtension))
         }
     }
+    allFiles.sort()
     
-    struct Summary {
-        var type: String
-        var count: Int
-        var size: Int
-    }
-    var grouped: [String: Summary] = [:]
-    
+    var grouped: [String: TypeSummary] = [:]
     for file in allFiles {
         let ext = file.fileType.isEmpty ? "No Extension" : file.fileType
-        var summary = grouped[ext] ?? Summary(type: ext, count: 0, size: 0)
+        var summary = grouped[ext] ?? TypeSummary(type: ext, count: 0, size: 0)
         summary.count += 1
         summary.size += file.size
         grouped[ext] = summary
     }
     
-
-    
     let totalTime = Date().timeIntervalSince1970 - startTime
+    let summary: Array<TypeSummary> = Array(grouped.values.sorted().prefix(number))
+
+    return (totalFiles, Double(totalTime), totalFileSize, summary, Array(allFiles.prefix(number)))
+}
+
+
+func renderAnalysis(totalFiles: Int, totalTime: Double, totalFileSize: Int, summary: Array<TypeSummary>, files: Array<BigFile>, human: Bool) {
     print("Total File Checked: \(totalFiles) in \(String(format: "%.3f",totalTime)) seconds")
     print("Total Size in Path: \(humanReadable(totalFileSize))\n")
-    
-    print("Top \(number) file types")
-    for summary in (grouped.sorted { $0.value.size > $1.value.size }).prefix(number) {
-        let perc = Int(100 * Double(summary.value.size) / Double(totalFileSize))
-        print("\(humanReadable(summary.value.size)) (\(perc)%)\t\(summary.value.type)\t\(summary.value.count) file(s) ")
+
+    print("Top \(summary.count) file types")
+    for summ in summary {
+        let perc = Int(100 * Double(summ.size) / Double(totalFileSize))
+        print("\(humanReadable(summ.size)) (\(perc)%)\t\(summ.type)\t\(summ.count) file(s) ")
     }
     print("\n")
-    
-    allFiles.sort { $0.size > $1.size }
-    
-    print("Top \(number) files")
-    for file in allFiles.prefix(number) {
+
+    print("Top \(files.count) files")
+    for file in files {
         var size: String
-        if true || human {
+        if human {
             size = humanReadable(file.size)
         } else {
             size = String(file.size)
@@ -113,9 +126,7 @@ func analyzePath(path: URL, human: Bool, number: Int) {
         let perc = Int(100 * Double(file.size) / Double(totalFileSize))
         print("\(size) (\(perc)%)\t\(file.fileType)\t\(file.name)")
     }
-    
 }
-
 struct BigFiles: ParsableCommand {
     
     @Flag(help: "human readable format")
@@ -127,13 +138,17 @@ struct BigFiles: ParsableCommand {
     @Argument(help: "The path to search")
     var path: String?
     
-
-    
     mutating func run() throws {
-        analyzePath(path: URL(fileURLWithPath: (path ?? FileManager.default.currentDirectoryPath)),
-                   human: human,
-                   number: number)
+        let analysis = analyzePath(path: URL(fileURLWithPath: (path ?? FileManager.default.currentDirectoryPath)), number: number)
         
+        renderAnalysis(
+            totalFiles: analysis.totalFiles,
+            totalTime: analysis.totalTime,
+            totalFileSize: analysis.totalFileSize,
+            summary: analysis.summary,
+            files: analysis.files,
+            human: human
+        )
     }
 }
 
